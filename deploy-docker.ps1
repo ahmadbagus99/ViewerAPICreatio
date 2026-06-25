@@ -28,13 +28,51 @@ if (-not (Test-Path $EnvironmentPath)) {
     throw "Konfigurasi deployment belum siap. Edit .env.docker lalu jalankan script ini lagi."
 }
 
+$envVars = @{}
+Get-Content $EnvironmentPath | ForEach-Object {
+    if ($_ -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+        $envVars[$Matches[1]] = $Matches[2].Trim()
+    }
+}
+
+$useExternalDb = -not [string]::IsNullOrWhiteSpace($envVars['DATABASE_URL']) -or
+                 -not [string]::IsNullOrWhiteSpace($envVars['POSTGRES_HOST'])
+
 $arguments = @(
     "compose",
     "--env-file", $EnvironmentPath,
-    "-f", $ComposePath,
-    "up",
-    "--build"
+    "-f", $ComposePath
 )
+
+if ($useExternalDb) {
+    Write-Host "Menggunakan database eksternal."
+} else {
+    $preferredVersions = @("16-alpine", "15-alpine", "14-alpine", "17-alpine")
+    $postgresImage = $null
+
+    $localImages = docker images --format "{{.Repository}}:{{.Tag}}" 2>$null | Where-Object { $_ -like "postgres:*" }
+    if ($localImages) {
+        foreach ($ver in $preferredVersions) {
+            if ($localImages -contains "postgres:$ver") {
+                $postgresImage = "postgres:$ver"
+                Write-Host "Menggunakan image postgres lokal yang sudah ada: $postgresImage"
+                break
+            }
+        }
+        if (-not $postgresImage) {
+            $postgresImage = ($localImages | Select-Object -First 1)
+            Write-Host "Menggunakan image postgres lokal yang ditemukan: $postgresImage"
+        }
+    } else {
+        $postgresImage = "postgres:17-alpine"
+        Write-Host "Tidak ada image postgres lokal. Akan pull: $postgresImage"
+    }
+
+    $env:POSTGRES_IMAGE = $postgresImage
+    $arguments += @("--profile", "managed-db")
+}
+
+$arguments += @("up", "--build")
 if ($Detached) {
     $arguments += "-d"
 }
