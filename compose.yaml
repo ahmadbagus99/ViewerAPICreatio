@@ -44,7 +44,15 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - viewer_runtime:/app/.runtime
+    networks:
+      - default
+      - creatio-shared
 
 volumes:
   viewer_postgres_data:
   viewer_runtime:
+
+networks:
+  creatio-shared:
+    external: true
+    name: shared_creatio-shared
