@@ -169,6 +169,11 @@ Registration flow:
 The Scanner can publish after approval. The Viewer stores only a hash of the
 Scanner token.
 
+Swagger **Try it out** requests are sent through the Viewer API proxy. This
+avoids browser CORS restrictions when the documented Creatio API is hosted on
+a different origin. Proxy targets are restricted to the documentation
+`baseUrl`; the Viewer does not act as an unrestricted proxy.
+
 ## Administration
 
 Open:
@@ -303,6 +308,7 @@ GET    /api/catalog
 POST   /api/scanners/register
 GET    /api/scanner/status
 POST   /api/publish
+*      /api/proxy/{slug}
 POST   /api/admin/login
 POST   /api/admin/logout
 GET    /api/admin/instances
@@ -333,4 +339,3 @@ The repository `.gitignore` excludes:
 - Python caches and test artifacts
 - Runtime log files
 - Common editor and operating-system files
-

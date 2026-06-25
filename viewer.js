@@ -14,6 +14,22 @@ function formatMeta(item) {
   return `${item.endpointCount || 0} endpoint - ${item.packageCount || 0} package - update ${generated}`;
 }
 
+function isApiTarget(targetUrl, baseUrl) {
+  if (!targetUrl || !baseUrl) return false;
+  try {
+    const target = new URL(targetUrl);
+    const base = new URL(baseUrl);
+    const basePath = base.pathname.replace(/\/+$/, "");
+    return target.origin === base.origin && (
+      !basePath ||
+      target.pathname === basePath ||
+      target.pathname.startsWith(`${basePath}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function loadSwagger(item) {
   emptyState.classList.add("d-none");
   document.querySelector("#swagger-ui").innerHTML = "";
@@ -36,6 +52,8 @@ async function loadSwagger(item) {
     const configuredTokenUrl = oauthFlow?.tokenUrl || "";
     const oauthProxyUrl =
       `${window.location.origin}/api/oauth/token/${encodeURIComponent(item.slug)}`;
+    const apiProxyUrl =
+      `${window.location.origin}/api/proxy/${encodeURIComponent(item.slug)}`;
     SwaggerUIBundle({
       spec,
       dom_id: "#swagger-ui",
@@ -47,6 +65,8 @@ async function loadSwagger(item) {
       requestInterceptor: (request) => {
         if (configuredTokenUrl && request.url === configuredTokenUrl) {
           request.url = oauthProxyUrl;
+        } else if (isApiTarget(request.url, item.baseUrl)) {
+          request.url = `${apiProxyUrl}?url=${encodeURIComponent(request.url)}`;
         }
         return request;
       }

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -25,6 +25,16 @@ DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
 SESSION_COOKIE = "viewer_admin_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
 
 
 def slugify(value: str) -> str:
@@ -120,6 +130,91 @@ class Handler(SimpleHTTPRequestHandler):
     def read_payload(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length) or b"{}")
+
+    def proxy_slug(self) -> str | None:
+        path = unquote(urlsplit(self.path).path)
+        match = re.fullmatch(r"/api/proxy/([^/]+)", path)
+        return match.group(1) if match else None
+
+    def proxy_api_request(self, slug: str) -> None:
+        try:
+            item = STORAGE.get_item(slug)
+            if item is None or item.get("visibility", "public") != "public":
+                self.send_json(404, {"error": "Documentation not found."})
+                return
+
+            base_url = str(item.get("baseUrl", "")).strip().rstrip("/")
+            query = dict(parse_qsl(urlsplit(self.path).query, keep_blank_values=True))
+            target_url = str(query.get("url", "")).strip()
+            if not base_url or not target_url:
+                self.send_json(400, {"error": "The API proxy target is invalid."})
+                return
+
+            base = urlsplit(base_url)
+            target = urlsplit(target_url)
+            base_path = base.path.rstrip("/")
+            target_in_base = (
+                target.scheme in {"http", "https"}
+                and target.scheme.lower() == base.scheme.lower()
+                and target.hostname == base.hostname
+                and target.port == base.port
+                and (
+                    not base_path
+                    or target.path == base_path
+                    or target.path.startswith(f"{base_path}/")
+                )
+            )
+            if not target_in_base or target.username or target.password:
+                self.send_json(403, {"error": "The API proxy target is not allowed."})
+                return
+
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length else None
+            excluded_request_headers = HOP_BY_HOP_HEADERS | {
+                "host",
+                "content-length",
+                "origin",
+                "referer",
+                "cookie",
+                "accept-encoding",
+            }
+            headers = {
+                name: value
+                for name, value in self.headers.items()
+                if name.lower() not in excluded_request_headers
+            }
+            request = Request(
+                target_url,
+                data=body,
+                headers=headers,
+                method=self.command,
+            )
+            try:
+                response = urlopen(request, timeout=60)
+            except HTTPError as exc:
+                response = exc
+
+            with response:
+                response_body = response.read()
+                self.send_response(response.status)
+                excluded_response_headers = HOP_BY_HOP_HEADERS | {
+                    "content-length",
+                    "content-encoding",
+                    "set-cookie",
+                    "access-control-allow-origin",
+                    "access-control-allow-credentials",
+                    "access-control-allow-headers",
+                    "access-control-allow-methods",
+                }
+                for name, value in response.headers.items():
+                    if name.lower() not in excluded_response_headers:
+                        self.send_header(name, value)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(response_body)))
+                self.end_headers()
+                self.wfile.write(response_body)
+        except (URLError, ValueError, OSError) as exc:
+            self.send_json(502, {"error": f"The target API could not be reached: {exc}"})
 
     def proxy_oauth_token(self, slug: str) -> None:
         try:
@@ -222,6 +317,10 @@ class Handler(SimpleHTTPRequestHandler):
         return session
 
     def do_GET(self) -> None:
+        proxy_slug = self.proxy_slug()
+        if proxy_slug:
+            self.proxy_api_request(proxy_slug)
+            return
         path = unquote(self.path.split("?", 1)[0])
         if path in {"/api/catalog", "/docs/catalog.json"}:
             self.send_json(200, public_catalog())
@@ -294,6 +393,10 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
+        proxy_slug = self.proxy_slug()
+        if proxy_slug:
+            self.proxy_api_request(proxy_slug)
+            return
         path = unquote(self.path.split("?", 1)[0])
         oauth_match = re.fullmatch(r"/api/oauth/token/([^/]+)", path)
         if oauth_match:
@@ -451,6 +554,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": str(exc)})
 
     def do_PUT(self) -> None:
+        proxy_slug = self.proxy_slug()
+        if proxy_slug:
+            self.proxy_api_request(proxy_slug)
+            return
         path = unquote(self.path.split("?", 1)[0])
         scanner_match = re.fullmatch(r"/api/admin/scanners/([^/]+)", path)
         if scanner_match:
@@ -523,6 +630,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(500, {"error": str(exc)})
 
     def do_DELETE(self) -> None:
+        proxy_slug = self.proxy_slug()
+        if proxy_slug:
+            self.proxy_api_request(proxy_slug)
+            return
         path = unquote(self.path.split("?", 1)[0])
         admin_scanner_match = re.fullmatch(r"/api/admin/scanners/([^/]+)", path)
         if admin_scanner_match:
@@ -571,6 +682,13 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(200, {"ok": True})
         except Exception as exc:
             self.send_json(500, {"error": str(exc)})
+
+    def do_PATCH(self) -> None:
+        proxy_slug = self.proxy_slug()
+        if proxy_slug:
+            self.proxy_api_request(proxy_slug)
+            return
+        self.send_json(404, {"error": "Endpoint not found."})
 
 
 def main() -> None:
