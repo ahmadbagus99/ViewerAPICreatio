@@ -1,0 +1,43 @@
+services:
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - viewer_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  viewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8090
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      VIEWER_PUBLIC_URL: ${VIEWER_PUBLIC_URL}
+      VIEWER_ADMIN_USERNAME: ${VIEWER_ADMIN_USERNAME}
+      VIEWER_ADMIN_PASSWORD: ${VIEWER_ADMIN_PASSWORD}
+      VIEWER_SESSION_SECRET: ${VIEWER_SESSION_SECRET}
+      VIEWER_COOKIE_SECURE: ${VIEWER_COOKIE_SECURE}
+    ports:
+      - "${VIEWER_PORT:-8090}:8090"
+    volumes:
+      - viewer_runtime:/app/.runtime
+
+volumes:
+  viewer_postgres_data:
+  viewer_runtime:

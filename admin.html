@@ -1,0 +1,262 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Viewer Management - Creatio API</title>
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png?v=1" />
+    <link rel="shortcut icon" href="/favicon.ico?v=1" />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+      crossorigin="anonymous"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css"
+    />
+    <link rel="stylesheet" href="viewer.css?v=20260624-footer" />
+  </head>
+  <body class="admin-page">
+    <nav class="navbar bg-white border-bottom sticky-top admin-topbar">
+      <div class="container-fluid px-3 px-lg-4">
+        <button
+          class="btn btn-outline-secondary d-lg-none me-2"
+          type="button"
+          data-bs-toggle="offcanvas"
+          data-bs-target="#admin-sidebar"
+          aria-controls="admin-sidebar"
+          aria-label="Open menu"
+        >
+          <i class="bi bi-list" aria-hidden="true"></i>
+        </button>
+        <div class="navbar-brand py-2">
+          <span class="d-block fw-bold">Viewer Management</span>
+          <small id="admin-meta" class="d-block text-secondary fw-normal">
+            Loading published instances.
+          </small>
+        </div>
+        <div class="d-flex gap-2">
+          <button id="logout-button" class="btn btn-outline-danger" type="button">
+            <i class="bi bi-box-arrow-right" aria-hidden="true"></i>
+            <span class="d-none d-sm-inline ms-1">Logout</span>
+          </button>
+        </div>
+      </div>
+    </nav>
+
+    <div class="admin-layout">
+      <aside
+        id="admin-sidebar"
+        class="offcanvas-lg offcanvas-start admin-sidebar"
+        tabindex="-1"
+        aria-labelledby="admin-sidebar-title"
+      >
+        <div class="offcanvas-header border-bottom d-lg-none">
+          <h2 id="admin-sidebar-title" class="offcanvas-title fs-5">Management Menu</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#admin-sidebar" aria-label="Close"></button>
+        </div>
+        <div class="offcanvas-body p-3">
+          <nav class="nav nav-pills flex-column gap-1" aria-label="Viewer management">
+            <button class="nav-link active text-start" type="button" data-admin-section="scanners">
+              <i class="bi bi-pc-display me-2" aria-hidden="true"></i>
+              Registered Scanners
+            </button>
+            <button class="nav-link text-start" type="button" data-admin-section="instances">
+              <i class="bi bi-journal-code me-2" aria-hidden="true"></i>
+              Published Instances
+            </button>
+          </nav>
+        </div>
+      </aside>
+
+      <main class="admin-content p-3 p-lg-4">
+        <section id="section-instances" class="admin-section">
+          <div class="admin-surface">
+            <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3 p-3 p-lg-4 border-bottom">
+              <div>
+                <h1 class="h5 mb-1">Published Instances</h1>
+                <p class="text-secondary mb-0">Documentation available on the Viewer service.</p>
+              </div>
+              <div class="input-group admin-search">
+                <span class="input-group-text bg-white">
+                  <i class="bi bi-search" aria-hidden="true"></i>
+                </span>
+                <input id="search-input" class="form-control" type="search" placeholder="Search instances..." />
+              </div>
+            </div>
+
+            <div class="table-responsive">
+              <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Name</th>
+                    <th>Local ID</th>
+                    <th>Status</th>
+                    <th>Visibility</th>
+                    <th>Endpoint</th>
+                    <th>Published</th>
+                    <th class="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="instance-rows"></tbody>
+              </table>
+            </div>
+            <div id="admin-empty" class="admin-empty text-center p-5">
+              <i class="bi bi-journal-code d-block mb-2" aria-hidden="true"></i>
+              No documentation has been published.
+            </div>
+          </div>
+        </section>
+
+        <section id="section-scanners" class="admin-section active">
+          <div class="admin-surface">
+            <div class="p-3 p-lg-4 border-bottom">
+              <h1 class="h5 mb-1">Registered Scanners</h1>
+              <p class="text-secondary mb-0">Approve or revoke scanner installations allowed to publish.</p>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Scanner</th>
+                    <th>Local ID</th>
+                    <th>Status</th>
+                    <th>Registered</th>
+                    <th class="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="scanner-rows"></tbody>
+              </table>
+            </div>
+            <div id="scanner-empty" class="admin-empty text-center p-5">
+              <i class="bi bi-pc-display d-block mb-2" aria-hidden="true"></i>
+              No scanners are registered.
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal fade" id="instance-modal" tabindex="-1" aria-labelledby="instance-modal-title" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <div>
+              <h2 id="instance-modal-title" class="modal-title fs-5">Edit Instance</h2>
+              <p id="form-status" class="text-secondary small mb-0">Update documentation information.</p>
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <form id="instance-form">
+            <div class="modal-body">
+              <input id="instance-slug" type="hidden" />
+              <div class="row g-3">
+                <div class="col-12">
+                  <label class="form-label" for="instance-name">Documentation name</label>
+                  <input id="instance-name" class="form-control" type="text" required />
+                </div>
+                <div class="col-12">
+                  <label class="form-label" for="instance-description">Description</label>
+                  <textarea id="instance-description" class="form-control" rows="4"></textarea>
+                </div>
+                <div class="col-12">
+                  <label class="form-label" for="instance-base-url">Creatio Base URL</label>
+                  <input id="instance-base-url" class="form-control" type="url" />
+                </div>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="instance-prefix">Package prefix</label>
+                  <input id="instance-prefix" class="form-control" type="text" />
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label" for="instance-status">Status</label>
+                  <select id="instance-status" class="form-select">
+                    <option value="active">Active</option>
+                    <option value="deprecated">Deprecated</option>
+                  </select>
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label" for="instance-visibility">Visibility</label>
+                  <select id="instance-visibility" class="form-select">
+                    <option value="public">Public</option>
+                    <option value="private">Private</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <div class="d-flex gap-2">
+                <button class="btn btn-light border" type="button" data-bs-dismiss="modal">Cancel</button>
+                <button id="save-button" class="btn btn-success" type="submit">
+                  <i class="bi bi-check2" aria-hidden="true"></i>
+                  <span class="ms-1">Save</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="delete-modal" tabindex="-1" aria-labelledby="delete-modal-title" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="delete-modal-title" class="modal-title fs-5">Delete Documentation</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="mb-2">The following documentation and its OpenAPI file will be permanently deleted:</p>
+            <strong id="delete-instance-name" class="d-block"></strong>
+            <small id="delete-instance-slug" class="text-secondary"></small>
+            <div id="delete-status" class="alert alert-danger d-none mt-3 mb-0" role="alert"></div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-light border" type="button" data-bs-dismiss="modal">Cancel</button>
+            <button id="confirm-delete-button" class="btn btn-danger" type="button">
+              <i class="bi bi-trash3" aria-hidden="true"></i>
+              <span class="ms-1">Delete</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal fade" id="delete-scanner-modal" tabindex="-1" aria-labelledby="delete-scanner-modal-title" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="delete-scanner-modal-title" class="modal-title fs-5">Delete Registered Scanner</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div id="delete-scanner-confirmation">
+              <p class="mb-2">The following scanner registration and token will be permanently deleted:</p>
+              <strong id="delete-scanner-name" class="d-block"></strong>
+              <code id="delete-scanner-id"></code>
+              <div class="alert alert-warning mt-3 mb-0">
+                Previously published documentation will not be deleted.
+              </div>
+            </div>
+            <div id="delete-scanner-result" class="alert d-none mb-0" role="alert"></div>
+          </div>
+          <div class="modal-footer">
+            <button id="delete-scanner-close" class="btn btn-light border" type="button" data-bs-dismiss="modal">Cancel</button>
+            <button id="confirm-delete-scanner" class="btn btn-danger" type="button">
+              <i class="bi bi-trash3 me-1" aria-hidden="true"></i>Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+      crossorigin="anonymous"
+    ></script>
+    <script src="admin.js?v=20260624-6"></script>
+  </body>
+</html>
+
