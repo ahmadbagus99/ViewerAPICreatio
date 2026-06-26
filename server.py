@@ -378,6 +378,15 @@ class Handler(SimpleHTTPRequestHandler):
 
             with response:
                 response_body = response.read()
+                if is_bpmcsrf and is_login:
+                    try:
+                        login_result = json.loads(response_body)
+                        if login_result.get("Code", 0) != 0:
+                            message = login_result.get("Message", "Incorrect username or password.")
+                            self.send_json(401, {"error": message})
+                            return
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
                 if is_bpmcsrf:
                     update_bpmcsrf_cookies(slug, response.headers)
                 self.send_response(response.status)
