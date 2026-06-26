@@ -46,6 +46,10 @@ body {
   display: none;
 }
 
+#swagger-ui.oauth-hide-global-errors .errors-wrapper {
+  display: none;
+}
+
 .public-viewer-page #swagger-ui .swagger-ui {
   padding-bottom: 32px;
 }
