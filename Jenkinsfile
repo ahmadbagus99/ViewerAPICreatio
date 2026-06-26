@@ -15,7 +15,7 @@ pipeline {
                         ssh -o StrictHostKeyChecking=no ${SERVER_USER}@${SERVER_HOST} '
                             cd ${DEPLOY_PATH} &&
                             git pull &&
-                            docker compose restart viewer
+                            docker compose --env-file .env.docker up -d --build viewer
                         '
                     """
                 }
