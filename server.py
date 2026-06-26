@@ -9,6 +9,7 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
+from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
 SESSION_COOKIE = "viewer_admin_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
+BPMCSRF_SESSIONS: dict[str, dict[str, str]] = {}
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -107,6 +109,101 @@ def public_catalog() -> dict[str, Any]:
     return {"items": items}
 
 
+def normalize_bpmcsrf_openapi(openapi: dict[str, Any]) -> dict[str, Any]:
+    if openapi.get("x-authentication-mode", "bpmcsrf") != "bpmcsrf":
+        return openapi
+
+    components = openapi.setdefault("components", {})
+    security_schemes = components.setdefault("securitySchemes", {})
+    if "creatioCookieAuth" in security_schemes or "creatioBasicAuth" not in security_schemes:
+        security_schemes.pop("creatioCookieAuth", None)
+        security_schemes["creatioBasicAuth"] = {
+            "type": "http",
+            "scheme": "basic",
+            "description": (
+                "Enter your Creatio username and password. The Viewer proxy "
+                "logs in to Creatio, stores the BPMCSRF session cookie, and "
+                "uses that cookie for service requests."
+            ),
+        }
+
+    for path_item in openapi.get("paths", {}).values():
+        if not isinstance(path_item, dict):
+            continue
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            if operation.get("security") == [{"creatioCookieAuth": []}]:
+                operation["security"] = [{"creatioBasicAuth": []}]
+
+    login = openapi.get("paths", {}).get("/ServiceModel/AuthService.svc/Login", {}).get("post")
+    if isinstance(login, dict):
+        login["description"] = (
+            "Create a Creatio session and obtain the BPMCSRF cookie. "
+            "The Viewer proxy accepts Username and Password, then sends "
+            "them to Creatio as UserName and UserPassword."
+        )
+        json_body = (
+            login.setdefault("requestBody", {})
+            .setdefault("content", {})
+            .setdefault("application/json", {})
+        )
+        json_body["schema"] = {
+            "type": "object",
+            "required": ["Username", "Password"],
+            "properties": {
+                "Username": {"type": "string", "example": "{{Username}}"},
+                "Password": {
+                    "type": "string",
+                    "format": "password",
+                    "example": "{{Password}}",
+                },
+            },
+        }
+        json_body["example"] = {
+            "Username": "{{Username}}",
+            "Password": "{{Password}}",
+        }
+    return openapi
+
+
+def basic_auth_credentials(authorization: str) -> tuple[str, str] | None:
+    if not authorization.startswith("Basic "):
+        return None
+    try:
+        decoded = base64.b64decode(
+            authorization.removeprefix("Basic ").strip()
+        ).decode("utf-8")
+    except Exception:
+        return None
+    username, separator, password = decoded.partition(":")
+    if not separator or not username or not password:
+        return None
+    return username, password
+
+
+def update_bpmcsrf_cookies(slug: str, headers: Any) -> None:
+    session = BPMCSRF_SESSIONS.setdefault(slug, {})
+    for header in headers.get_all("Set-Cookie", []):
+        cookie = SimpleCookie()
+        cookie.load(header)
+        for name, morsel in cookie.items():
+            session[name] = morsel.value
+
+
+def bpmcsrf_cookie_header(slug: str) -> str:
+    session = BPMCSRF_SESSIONS.get(slug, {})
+    return "; ".join(f"{name}={value}" for name, value in session.items())
+
+
+def bpmcsrf_token(slug: str) -> str:
+    session = BPMCSRF_SESSIONS.get(slug, {})
+    for name, value in session.items():
+        if name.lower() == "bpmcsrf":
+            return value
+    return ""
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -168,8 +265,81 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(403, {"error": "The API proxy target is not allowed."})
                 return
 
+            auth_mode = str(item.get("authMode", "bpmcsrf")).lower()
+            is_bpmcsrf = auth_mode == "bpmcsrf"
+            is_login = target.path.lower().endswith(
+                "/servicemodel/authservice.svc/login"
+            )
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length else None
+            content_type = self.headers.get("Content-Type", "")
+            authorization = self.headers.get("Authorization", "")
+            basic_credentials = basic_auth_credentials(authorization)
+            if is_bpmcsrf and is_login:
+                if not content_type.lower().startswith("application/json"):
+                    self.send_json(
+                        400,
+                        {"error": "The BPMCSRF login request must be JSON."},
+                    )
+                    return
+                try:
+                    credentials = json.loads(body or b"{}")
+                except json.JSONDecodeError:
+                    self.send_json(400, {"error": "Invalid JSON login request."})
+                    return
+                username = credentials.get("Username", credentials.get("UserName"))
+                password = credentials.get("Password", credentials.get("UserPassword"))
+                if not username or not password:
+                    self.send_json(
+                        400,
+                        {"error": "Username and Password are required."},
+                    )
+                    return
+                body = json.dumps(
+                    {"UserName": username, "UserPassword": password}
+                ).encode("utf-8")
+            elif is_bpmcsrf and not BPMCSRF_SESSIONS.get(slug):
+                if not basic_credentials:
+                    self.send_json(
+                        401,
+                        {"error": "Enter your Creatio username and password through Authorize before executing this service."},
+                    )
+                    return
+                username, password = basic_credentials
+                login_body = json.dumps(
+                    {"UserName": username, "UserPassword": password}
+                ).encode("utf-8")
+                login_request = Request(
+                    f"{base_url}/ServiceModel/AuthService.svc/Login",
+                    data=login_body,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                try:
+                    with urlopen(login_request, timeout=30) as login_response:
+                        login_response.read()
+                        update_bpmcsrf_cookies(slug, login_response.headers)
+                except HTTPError as exc:
+                    detail = exc.read()
+                    self.send_response(exc.code)
+                    self.send_header(
+                        "Content-Type",
+                        exc.headers.get("Content-Type", "application/json"),
+                    )
+                    self.send_header("Content-Length", str(len(detail)))
+                    self.end_headers()
+                    self.wfile.write(detail)
+                    return
+                if not BPMCSRF_SESSIONS.get(slug):
+                    self.send_json(
+                        401,
+                        {"error": "Creatio login did not return a BPMCSRF session cookie."},
+                    )
+                    return
+
             excluded_request_headers = HOP_BY_HOP_HEADERS | {
                 "host",
                 "content-length",
@@ -178,11 +348,20 @@ class Handler(SimpleHTTPRequestHandler):
                 "cookie",
                 "accept-encoding",
             }
+            if is_bpmcsrf:
+                excluded_request_headers.add("authorization")
             headers = {
                 name: value
                 for name, value in self.headers.items()
                 if name.lower() not in excluded_request_headers
             }
+            if is_bpmcsrf:
+                cookie_header = bpmcsrf_cookie_header(slug)
+                if cookie_header:
+                    headers["Cookie"] = cookie_header
+                token = bpmcsrf_token(slug)
+                if token:
+                    headers["BPMCSRF"] = token
             request = Request(
                 target_url,
                 data=body,
@@ -196,6 +375,8 @@ class Handler(SimpleHTTPRequestHandler):
 
             with response:
                 response_body = response.read()
+                if is_bpmcsrf:
+                    update_bpmcsrf_cookies(slug, response.headers)
                 self.send_response(response.status)
                 excluded_response_headers = HOP_BY_HOP_HEADERS | {
                     "content-length",
@@ -388,7 +569,7 @@ class Handler(SimpleHTTPRequestHandler):
             if document is None:
                 self.send_json(404, {"error": "Documentation not found."})
                 return
-            self.send_json(200, document)
+            self.send_json(200, normalize_bpmcsrf_openapi(document))
             return
         super().do_GET()
 
@@ -518,6 +699,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(openapi, dict):
                 self.send_json(400, {"error": "Invalid OpenAPI payload."})
                 return
+            openapi = normalize_bpmcsrf_openapi(openapi)
             existing = STORAGE.get_item(slug) or {}
             if (
                 existing.get("ownerScannerId")
