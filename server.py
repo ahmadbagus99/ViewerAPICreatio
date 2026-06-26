@@ -298,7 +298,8 @@ class Handler(SimpleHTTPRequestHandler):
                 body = json.dumps(
                     {"UserName": username, "UserPassword": password}
                 ).encode("utf-8")
-            elif is_bpmcsrf and not BPMCSRF_SESSIONS.get(slug):
+                content_type = "application/json"
+            elif is_bpmcsrf and not bpmcsrf_token(slug):
                 if not basic_credentials:
                     self.send_json(
                         401,
@@ -333,7 +334,7 @@ class Handler(SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(detail)
                     return
-                if not BPMCSRF_SESSIONS.get(slug):
+                if not bpmcsrf_token(slug):
                     self.send_json(
                         401,
                         {"error": "Creatio login did not return a BPMCSRF session cookie."},
@@ -355,6 +356,8 @@ class Handler(SimpleHTTPRequestHandler):
                 for name, value in self.headers.items()
                 if name.lower() not in excluded_request_headers
             }
+            if body is not None and content_type:
+                headers["Content-Type"] = content_type
             if is_bpmcsrf:
                 cookie_header = bpmcsrf_cookie_header(slug)
                 if cookie_header:
